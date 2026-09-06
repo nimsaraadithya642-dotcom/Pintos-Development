@@ -38,6 +38,220 @@
 #include "filesys/fsutil.h"
 #endif
 
+/* ============== SHELL IMPLEMENTATION START ================*/
+static void shell_run(void);
+static void shell_read_line(char* buffer, size_t size);
+static void shell_process_command (char *cmd);
+static void shell_trim (char *str);
+static void shell_cmd_whoami (void);
+static void shell_cmd_shutdown (void);
+static void shell_cmd_time (void);
+static void shell_cmd_ram (void);
+static void shell_cmd_thread (void);
+static void shell_cmd_priority (void);
+static void shell_cmd_exit (void);
+static void shell_cmd_help (void);
+
+/* Shell state */
+static bool shell_running = false;
+
+/* shell state */
+static void shell_run(void){
+
+  char cmd[128];
+
+  /* printing the welcome banner */
+  print_adios();
+  printf("\nWelcome to CS2042 Interactive shell for ADIOS\n");
+  printf("Type 'help' for available commands. \n\n");
+
+  shell_running = true;
+
+  while(shell_running){
+
+    printf("CS2042> "); // display prompt
+
+    shell_read_line(cmd, sizeof(cmd)); // read command form user
+
+    shell_process_command(cmd);  // Process the command
+
+  }
+
+}
+
+/* Read a line from the keyboard */
+static void shell_read_line(char* buffer, size_t size){
+
+      int c;
+    size_t i = 0;
+    
+    while (i < size - 1) {
+        c = input_getc ();
+        
+        if (c == '\r' || c == '\n') {
+            /* Enter key - finish input */
+            printf("\n");
+            break;
+        } else if (c == '\b' || c == 127) {
+            /* Backspace or Delete */
+            if (i > 0) {
+                i--;
+                printf("\b \b");
+            }
+        } else if (c >= 32 && c < 127) {
+            /* Printable character */
+            buffer[i++] = c;
+            printf("%c", c);
+        }
+        /* Ignore other control characters */
+    }
+    buffer[i] = '\0';
+
+}
+
+/* Remove leading and trailing whitespace from a string */
+static void shell_trim(char* str) {
+
+  char* start = str;
+  char* end;
+
+  /* Skip leading whitespace */
+  while(*start == ' ' || *start == '\t') start++;
+
+  if(*start == '\0') {
+    str[0] = '\0';
+    return;
+  }
+
+  /* Move to end of the string */
+  end = start + strlen (start) -1;
+
+  /* Skip trailing whitespace */
+  while (end > start && (*end == ' ' || *end == '\t' || *end == '\n' || *end == '\r'))
+      end--;
+
+      /* Copy trimmed string back */
+      memmove (str, start, end - start + 1);
+      str[ end - start + 1 ] = '\0';
+
+}
+
+/* Process and execute a command */
+static void shell_process_command(char* cmd){
+
+    char *save_ptr;
+    char *command;
+    char *arg;
+    
+    /* Trim whitespace */
+    shell_trim (cmd);
+    
+    /* Ignore empty commands */
+    if (strlen (cmd) == 0)
+        return;
+    
+    /* Parse command and optional argument */
+    command = strtok_r (cmd, " ", &save_ptr);
+    arg = strtok_r (NULL, "", &save_ptr);
+    
+    /* Execute the command */
+    if (!strcmp (command, "whoami")) {
+        shell_cmd_whoami ();
+    } else if (!strcmp (command, "shutdown")) {
+        shell_cmd_shutdown ();
+    } else if (!strcmp (command, "time")) {
+        shell_cmd_time ();
+    } else if (!strcmp (command, "ram")) {
+        shell_cmd_ram ();
+    } else if (!strcmp (command, "thread")) {
+        shell_cmd_thread ();
+    } else if (!strcmp (command, "priority")) {
+        shell_cmd_priority ();
+    } else if (!strcmp (command, "exit")) {
+        shell_cmd_exit ();
+    } else if (!strcmp (command, "help")) {
+        shell_cmd_help ();
+    } else {
+        printf ("Unknown command: '%s'\n", command);
+        printf ("Type 'help' for available commands.\n");
+    }
+
+}
+
+/* Whoami : Display your name and index number */
+static void shell_cmd_whoami(void){
+
+  printf("Name: Adithya Nimsara\n");
+  printf("Index Number : 240479N\n");
+}
+
+static void shell_cmd_shutdown(void){
+
+  printf("\n⚡⚡⚡Power off.............\n");
+  printf("Shutting down ......\n");
+  printf("ADIOS 👋👋👋 !!!!\n");
+  shutdown_power_off();
+}
+
+static void shell_cmd_time(void){
+
+  time_t t = rtc_get_time();
+  printf("Seconds since Unix epoch %" PRIu32 "\n", t);
+}
+
+/* ram - Display available RAM information */
+static void
+shell_cmd_ram (void)
+{
+    uint32_t ram_kb = init_ram_pages * PGSIZE / 1024;
+    printf ("Total RAM: %" PRIu32 " KB (%" PRIu32 " pages)\n", ram_kb, init_ram_pages);
+}
+
+
+/* thread - Display thread statistics */
+static void
+shell_cmd_thread (void)
+{
+    thread_print_stats ();
+}
+
+/* priority - Display current thread priority */
+static void
+shell_cmd_priority (void)
+{
+    struct thread *cur = thread_current ();
+    printf ("Current thread priority: %d\n", cur->priority);
+}
+
+/* exit - Exit the interactive shell */
+static void
+shell_cmd_exit (void)
+{
+    printf ("Exiting shell. Goodbye!\n");
+    shell_running = false;
+}
+
+/* help - Display available commands */
+static void
+shell_cmd_help (void)
+{
+    printf ("+--------------------------------------------------+\n");
+    printf ("|              Available commands:                 |\n");
+    printf ("+--------------------------------------------------+\n");
+    printf ("|  whoami    - Display your name and index number  |\n");
+    printf ("|  shutdown  - Shutdown Pintos OS and exit QEMU    |\n");
+    printf ("|  time      - Display seconds since Unix epoch    |\n");
+    printf ("|  ram       - Display available RAM               |\n");
+    printf ("|  thread    - Display thread statistics           |\n");
+    printf ("|  priority  - Display current thread priority     |\n");
+    printf ("|  exit      - Exit the interactive shell          |\n");
+    printf ("|  help      - Display this help message           |\n");
+    printf ("+--------------------------------------------------+\n");
+}
+
+/* ==================== SHELL IMPLEMENTATION END ==================== */
+
+
 /* Page directory with kernel mappings only. */
 uint32_t *init_page_dir;
 
@@ -91,7 +305,8 @@ pintos_init (void)
   console_init ();  
 
   /* Greet user. */
-  printf ("Pintos booting with %'"PRIu32" kB RAM...\n",
+  //print_adios();
+  printf ("booting with %'"PRIu32" kB RAM...\n",
           init_ram_pages * PGSIZE / 1024);
 
   /* Initialize memory system. */
@@ -131,9 +346,11 @@ pintos_init (void)
   
   if (*argv != NULL) {
     /* Run actions specified on kernel command line. */
+    
     run_actions (argv);
   } else {
     // TODO: no command line passed to kernel. Run interactively 
+    shell_run();
   }
 
   /* Finish up. */
@@ -431,3 +648,16 @@ locate_block_device (enum block_type role, const char *name)
     }
 }
 #endif
+
+void print_adios() {
+    printf("\n\n");
+    printf("_________________________________________\n\n");
+    printf("    █████  ██████   ██  ██████  ███████ \n");
+    printf("   ██   ██ ██    ██ ██ ██    ██ ██      \n");
+    printf("   ███████ ██    ██ ██ ██    ██ ███████ \n");
+    printf("   ██   ██ ██    ██ ██ ██    ██      ██ \n");
+    printf("   ██   ██ ██████   ██  ██████  ███████  V 1.0 \n");
+    printf("_________________________________________\n\n");
+    printf("\n");
+};
+
