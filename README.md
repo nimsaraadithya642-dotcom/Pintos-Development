@@ -9,3 +9,4 @@ The course instructor ([Ryan Huang](mailto:huang@cs.jhu.edu)) made some changes 
 Pintos labs to tailor for his class. The upstream for this branch comes from 
 [https://github.com/ryanphuang/PintosM](https://github.com/ryanphuang/PintosM). For students in the class, please
 download the release version for this branch at https://github.com/jhu-cs318/pintos.git
+# Pintos-Development
