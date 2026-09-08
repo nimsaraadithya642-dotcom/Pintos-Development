@@ -34,6 +34,8 @@ static struct thread *idle_thread;
 /* Initial thread, the thread running init.c:main(). */
 static struct thread *initial_thread;
 
+struct list sleeping_list;  /* List of all sleeping threads */
+
 /* Lock used by allocate_tid(). */
 static struct lock tid_lock;
 
@@ -92,6 +94,7 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
+  list_init(&sleeping_list);
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -219,6 +222,41 @@ thread_block (void)
   thread_current ()->status = THREAD_BLOCKED;
   schedule ();
 }
+
+
+/* Wakes up any threads that have slept long enough.
+   Called by the timer interrupt handler. */
+
+void thread_wake_sleeping(void) {
+
+  struct list_elem *e;
+  struct thread *t;
+
+  /* loop through all sleeping threads */
+
+  e = list_begin (&sleeping_list); /* returns a pointer to the first thread in sleeping list */
+
+  while( e != list_end(&sleeping_list)) {
+
+    t = list_entry( e, struct thread, sleep_elem);
+
+    /* If this thread's sleep time has passed, wake it up, */
+    if(t->sleep_until <= timer_ticks()){
+
+      e = list_remove(e);
+      thread_unblock (t);
+
+    }
+    else{
+      e = list_next(e);
+    }
+
+  }
+
+ }
+
+
+
 
 /* Transitions a blocked thread T to the ready-to-run state.
    This is an error if T is not blocked.  (Use thread_yield() to
