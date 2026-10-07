@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "threads/fixed-point.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -94,9 +95,21 @@ struct thread
     struct list_elem elem;              /* List element. */
 
     /*##########################################################*/
+
     int64_t sleep_until;  /* Time to wake up (in timer ticks) */
     struct list_elem sleep_elem; /* List element for sleeping threads */
+
+    int base_priority; /* Original priority without donations */
+    struct lock *waiting_lock;  /* Lock we're waiting for (if blocked) */
+    struct list_elem donation_elem; /* For tracking donations */
+    struct list donations; /* List of threads that donated to us. */
+
     /*##########################################################*/
+
+    /* ############## MLFQS Fields #############################*/
+    int nice;                   /* Niceness value (-20 to 20) */
+    int32_t recent_cpu;         /* Recent CPU usage (fixed-point) */
+    /* #########################################################*/
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
@@ -146,4 +159,14 @@ int thread_get_load_avg (void);
 void thread_wake_sleeping(void); /* simply wakes up sleeping threads */
 extern struct list sleeping_list;
 
+void thread_donate_priority (struct lock *lock);
+void thread_remove_donation (struct lock *lock);
+int thread_get_effective_priority (struct thread *t);
+void thread_update_priority (struct thread *t);
+
+extern int32_t load_avg;
+void mlfqs_update_priority_helper (struct thread *t, void *aux);
+int thread_ready_count(void);
+
+int thread_ready_count (void);
 #endif /* threads/thread.h */

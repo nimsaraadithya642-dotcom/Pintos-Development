@@ -14,6 +14,7 @@
 #include "devices/timer.h"
 #ifdef USERPROG
 #include "userprog/process.h"
+#include "threads/fixed-point.h"
 #endif
 
 /* Random value for struct thread's `magic' member.
@@ -75,6 +76,27 @@ void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
 static void ready_list_insert (struct thread *t);
 
+void mlfqs_update_priority_helper (struct thread *t, void *aux);
+
+
+/* FOR MLFQS*/
+/* ===== Comparator Functions for MLFQS ===== */
+
+/* Returns true if thread A has higher priority than thread B.
+   Used for sorting the ready list (higher priority first). */
+static bool
+thread_priority_less (const struct list_elem *a, 
+                      const struct list_elem *b,
+                      void *aux UNUSED)
+{
+  struct thread *ta = list_entry (a, struct thread, elem);
+  struct thread *tb = list_entry (b, struct thread, elem);
+  return ta->priority > tb->priority;  /* Higher priority comes first */
+}
+/* =========================================== */
+
+int32_t load_avg = 0; // for mlfqs, global load average
+
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
    general and it is possible in this case only because loader.S
@@ -103,6 +125,7 @@ thread_init (void)
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
+
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -167,6 +190,7 @@ thread_print_stats (void)
    The code provided sets the new thread's `priority' member to
    PRIORITY, but no actual priority scheduling is implemented.
    Priority scheduling is the goal of Problem 1-3. */
+
 tid_t
 thread_create (const char *name, int priority,
                thread_func *function, void *aux) 
@@ -176,6 +200,7 @@ thread_create (const char *name, int priority,
   struct switch_entry_frame *ef;
   struct switch_threads_frame *sf;
   tid_t tid;
+  int init_priority;
 
   ASSERT (function != NULL);
 
@@ -184,8 +209,11 @@ thread_create (const char *name, int priority,
   if (t == NULL)
     return TID_ERROR;
 
-  /* Initialize thread. */
-  init_thread (t, name, priority);
+  /* In MLFQS mode, user-supplied priority is ignored. */
+  init_priority = thread_mlfqs ? PRI_DEFAULT : priority;
+
+  /* Initialize thread ONCE. */
+  init_thread (t, name, init_priority);
   tid = t->tid = allocate_tid ();
 
   /* Stack frame for kernel_thread(). */
@@ -206,9 +234,9 @@ thread_create (const char *name, int priority,
   /* Add to run queue. */
   thread_unblock (t);
 
-  /* If the new thread has higher priority than the current thread, preempt. */
-  if (priority > thread_current()->priority)
-    thread_yield();
+  /* Only do preemption in priority (non-MLFQS) mode. */
+  if (!thread_mlfqs && init_priority > thread_current ()->priority)
+    thread_yield ();
 
   return tid;
 }
@@ -368,58 +396,76 @@ thread_foreach (thread_action_func *func, void *aux)
 
 /* Sets the current thread's priority to NEW_PRIORITY. */
 void thread_set_priority (int new_priority) {
-    struct thread *cur = thread_current ();
-    enum intr_level old_level = intr_disable ();
+
+    if(thread_mlfqs){
+      return;      /* MLFQS controls the priorities, so we do not have to cahnge anything. just return */
+    }
+
+    struct thread *cur = thread_current();
+    enum intr_level old_level = intr_disable();
     
-    cur->priority = new_priority;
+    cur->base_priority = new_priority;
+    cur->priority = thread_get_effective_priority(cur);
     
-    /* If we're no longer the highest priority, yield the CPU */
-    if (!list_empty (&ready_list)) {
-        struct thread *highest = list_entry (list_front (&ready_list), 
-                                             struct thread, elem);
+    /* Yield if we're no longer highest priority */
+    if (!list_empty(&ready_list)) {
+        struct thread *highest = list_entry(list_front(&ready_list), 
+                                           struct thread, elem);
         if (cur->priority < highest->priority)
-            thread_yield ();
+            thread_yield();
     }
     
-    intr_set_level (old_level);
+    intr_set_level(old_level);
 }
 
 /* Returns the current thread's priority. */
 int
 thread_get_priority (void) 
 {
+  /* In MLFQS mode, priority is set by the scheduler */
+  /* In priority mode, priority includes donations */
   return thread_current ()->priority;
 }
 
 /* Sets the current thread's nice value to NICE. */
+/* Sets the current thread's nice value to NICE. */
 void
-thread_set_nice (int nice UNUSED) 
+thread_set_nice (int nice) 
 {
-  /* Not yet implemented. */
+  struct thread *cur = thread_current ();
+  enum intr_level old_level = intr_disable ();
+  
+  /* Clamp nice to valid range [-20, 20] */
+  if (nice < -20) nice = -20;
+  if (nice > 20) nice = 20;
+  
+  cur->nice = nice;
+  thread_update_priority (cur);
+  
+  intr_set_level (old_level);
 }
 
 /* Returns the current thread's nice value. */
 int
 thread_get_nice (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  
+  return thread_current()->nice;
 }
 
 /* Returns 100 times the system load average. */
 int
 thread_get_load_avg (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  return fp_to_int_round(fp_mul_int(load_avg, 100));
 }
 
 /* Returns 100 times the current thread's recent_cpu value. */
 int
 thread_get_recent_cpu (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  struct thread *cur = thread_current ();
+  return fp_to_int_round (fp_mul_int (cur->recent_cpu, 100));
 }
 
 /* Idle thread.  Executes when no other thread is ready to run.
@@ -508,11 +554,21 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+  t->base_priority = priority;        /* ← NEW: Store base priority */
+  t->waiting_lock = NULL;             /* ← NEW: Not waiting for any lock yet */
+  list_init (&t->donations);          /* ← NEW: Initialize donation list */
   t->magic = THREAD_MAGIC;
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);
+
+  /* Initialize MLFQS fields */
+
+  t->nice = 0;
+  t->recent_cpu = 0;
+
+
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
@@ -630,24 +686,149 @@ allocate_tid (void)
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
 
 
-/* Insert thread T into ready list in priority order (highest first). */
+/* Insert thread T into ready list in priority order (highest first).
+   Uses Pintos's built-in list_insert_ordered() with a comparator. */
 static void
 ready_list_insert (struct thread *t) 
 {
+  list_insert_ordered (&ready_list, &t->elem, thread_priority_less, NULL);
+}
+
+/* Returns the effective priority of thread T.
+   This is the maximum of its base priority and all donated priorities. */
+
+int thread_get_effective_priority (struct thread *t) 
+{
+  int max_priority = t->base_priority;
   struct list_elem *e;
   
-  /* Find the right spot: loop through ready list */
-  for (e = list_begin (&ready_list); e != list_end (&ready_list);
-       e = list_next (e)) 
-    {
-      struct thread *cur = list_entry (e, struct thread, elem);
-      if (t->priority > cur->priority) {
-        /* Insert before this element (higher priority goes first) */
-        list_insert (e, &t->elem);
-        return;
-      }
-    }
+  /* Check all threads that donated to us */
+  for (e = list_begin (&t->donations); e != list_end (&t->donations);
+       e = list_next (e)) {
+    struct thread *donor = list_entry (e, struct thread, donation_elem);
+    if (donor->priority > max_priority)
+      max_priority = donor->priority;
+  }
   
-  /* If we get here, t has the lowest priority (or list is empty), so add to end */
-  list_push_back (&ready_list, &t->elem);
+  return max_priority;
+}
+
+/* Updates thread T's effective priority and yields if necessary.
+   Called after donation changes. */
+
+/* Updates thread T's effective priority. */
+void
+thread_update_priority (struct thread *t) 
+{
+  enum intr_level old_level = intr_disable ();
+  
+  if (thread_mlfqs) {
+    /* MLFQS mode: only recalculate priority. No yielding here —
+       the scheduler will pick up changes at the next tick via
+       intr_yield_on_return() from thread_tick(). */
+    int new_priority = PRI_MAX 
+                       - fp_to_int_floor (fp_div_int (t->recent_cpu, 4))
+                       - (t->nice * 2);
+    if (new_priority < PRI_MIN) new_priority = PRI_MIN;
+    if (new_priority > PRI_MAX) new_priority = PRI_MAX;
+    t->priority = new_priority;
+  } else {
+    /* Priority donation mode */
+    int old_priority = t->priority;
+    t->priority = thread_get_effective_priority (t);
+    
+    if (t->status == THREAD_READY && old_priority != t->priority) {
+      list_remove (&t->elem);
+      ready_list_insert (t);
+    }
+    
+    /* Only yield if not in an interrupt context. */
+    if (t == thread_current () && !intr_context ()
+        && !list_empty (&ready_list)) {
+      struct thread *highest = list_entry (list_front (&ready_list), 
+                                           struct thread, elem);
+      if (t->priority < highest->priority)
+        thread_yield ();
+    }
+  }
+  
+  intr_set_level (old_level);
+}
+
+/* Donate current thread's priority to the holder of LOCK.
+   Called when we try to acquire a held lock. */
+
+void thread_donate_priority (struct lock *lock) 
+{
+  struct thread *cur = thread_current ();
+  struct thread *holder = lock->holder;
+  
+  /* If no holder, or we're already the holder, nothing to do */
+  if (holder == NULL || holder == cur)
+    return;
+  
+  /* If we're already in the holder's donation list, don't add again */
+  if (!list_empty (&cur->donation_elem))
+    return;
+  
+  /* Add current thread to holder's donation list */
+  list_push_back (&holder->donations, &cur->donation_elem);
+  
+  /* Update holder's priority */
+  thread_update_priority (holder);
+  
+  /* Recursively donate up the chain if holder is waiting on a lock */
+  if (holder->waiting_lock != NULL)
+    thread_donate_priority (holder->waiting_lock);
+}
+
+/* Remove current thread's donation to LOCK's holder.
+   Called when we release a lock. */
+
+void thread_remove_donation (struct lock *lock) 
+{
+  struct thread *cur = thread_current ();
+  struct thread *holder = lock->holder;
+  
+  /* If we're not holding the lock, nothing to do */
+  if (holder == NULL || holder != cur)
+    return;
+  
+  /* Remove all donors from this thread's donation list */
+  while (!list_empty (&cur->donations)) {
+    struct list_elem *e = list_pop_front (&cur->donations);
+    struct thread *donor = list_entry (e, struct thread, donation_elem);
+    list_remove (&donor->donation_elem);  /* Reset donation element */
+  }
+  
+  /* Recalculate priority */
+  thread_update_priority (cur);
+}
+
+/* Helper for thread_foreach() to update priorities in MLFQS mode. */
+void
+mlfqs_update_priority_helper (struct thread *t, void *aux UNUSED)
+{
+  thread_update_priority (t);
+}
+
+/* Returns the number of threads currently in the ready list. */
+/* Returns the number of threads that are ready to run.
+   This includes threads in ready_list AND the currently running thread
+   (which is not in ready_list but is still runnable).
+   The idle thread is NOT counted. */
+int
+thread_ready_count (void)
+{
+  enum intr_level old_level = intr_disable ();
+  
+  int count = list_size (&ready_list);
+  
+  /* Include the currently running thread, unless it's idle. */
+  struct thread *cur = thread_current ();
+  if (cur != idle_thread)
+    count++;
+  
+  intr_set_level (old_level);
+  return count;
 }

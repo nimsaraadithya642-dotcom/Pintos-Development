@@ -6,6 +6,7 @@
 #include "devices/pit.h"
 #include "threads/interrupt.h"
 #include "threads/synch.h"
+#include "threads/fixed-point.h"
 #include "threads/thread.h"
   
 /* See [8254] for hardware details of the 8254 timer chip. */
@@ -189,9 +190,35 @@ static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
-  thread_wake_sleeping(); /* NEWLY ADDED: Wake up sleeping threads! */
+  
+  if (thread_mlfqs) {
+    struct thread *cur = thread_current ();
+    
+    /* Increment recent_cpu */
+    cur->recent_cpu = fp_add_int (cur->recent_cpu, 1);
+    
+    /* Debug: print every second */
+    if (ticks % TIMER_FREQ == 0) {
+      int ready_threads = thread_ready_count ();
+      int load_before = fp_to_int_round (fp_mul_int (load_avg, 100));
+      
+      load_avg = fp_div_int (
+             fp_add_int (fp_mul_int (load_avg, 59), ready_threads),
+             60);
+      
+      int load_after = fp_to_int_round (fp_mul_int (load_avg, 100));
+      
+      
+    }
+    
+    if (ticks % 4 == 0) {
+      thread_foreach (mlfqs_update_priority_helper, NULL);
+      thread_update_priority (cur);
+    }
+  }
+  
+  thread_wake_sleeping ();
   thread_tick ();
-
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer

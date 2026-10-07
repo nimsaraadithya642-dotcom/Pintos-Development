@@ -31,6 +31,13 @@
 #include <string.h>
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "threads/synch.h"
+#include <debug.h>
+#include <list.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include "threads/thread.h"
+#include "threads/interrupt.h"
 
 /* Initializes semaphore SEMA to VALUE.  A semaphore is a
    nonnegative integer along with two atomic operators for
@@ -178,6 +185,7 @@ lock_init (struct lock *lock)
   ASSERT (lock != NULL);
 
   lock->holder = NULL;
+  lock->max_priority = PRI_MIN;
   sema_init (&lock->semaphore, 1);
 }
 
@@ -189,15 +197,35 @@ lock_init (struct lock *lock)
    interrupt handler.  This function may be called with
    interrupts disabled, but interrupts will be turned back on if
    we need to sleep. */
-void
-lock_acquire (struct lock *lock)
+
+void lock_acquire (struct lock *lock)
 {
+  struct thread *cur = thread_current ();
+  enum intr_level old_level;
+  
   ASSERT (lock != NULL);
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
-
-  sema_down (&lock->semaphore);
-  lock->holder = thread_current ();
+  
+  old_level = intr_disable ();
+  
+  /* If lock is held by someone else, donate priority */
+  if (lock->holder != NULL && lock->holder != cur) {
+    cur->waiting_lock = lock;
+    thread_donate_priority (lock);
+    sema_down (&lock->semaphore);
+    /* When we wake up, lock is ours */
+    lock->holder = cur;
+    cur->waiting_lock = NULL;
+  } else {
+    sema_down (&lock->semaphore);
+    lock->holder = cur;
+  }
+  
+  /* Update lock's max priority */
+  lock->max_priority = cur->priority;
+  
+  intr_set_level (old_level);
 }
 
 /* Tries to acquires LOCK and returns true if successful or false
@@ -225,14 +253,26 @@ lock_try_acquire (struct lock *lock)
    An interrupt handler cannot acquire a lock, so it does not
    make sense to try to release a lock within an interrupt
    handler. */
-void
-lock_release (struct lock *lock) 
+
+void lock_release (struct lock *lock)
 {
+  struct thread *cur = thread_current ();
+  enum intr_level old_level;
+  
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
-
+  
+  old_level = intr_disable ();
+  
+  /* Remove this thread's donation from the lock */
+  thread_remove_donation (lock);
+  
   lock->holder = NULL;
+  lock->max_priority = PRI_MIN;
+  
   sema_up (&lock->semaphore);
+  
+  intr_set_level (old_level);
 }
 
 /* Returns true if the current thread holds LOCK, false
